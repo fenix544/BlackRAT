@@ -12,6 +12,7 @@ import (
 type Client struct {
 	Conn      net.Conn
 	Connected bool
+	Addr      string
 }
 
 func (client *Client) SendData(output string) {
@@ -47,7 +48,7 @@ func StartServer(host string, port int, runnable func()) {
 	}
 }
 
-func main() {
+func InitializeAndRun() {
 	file, err := ReadConfigFile(os.Getenv("CONFIG_FILE"))
 	if err != nil {
 		log.Errorf("Failed to read config file: %v", err)
@@ -69,6 +70,10 @@ func main() {
 	CommandLine()
 }
 
+func main() {
+	InitializeAndRun()
+}
+
 func HandleConnection(conn net.Conn) {
 	defer func(conn net.Conn) {
 		err := conn.Close()
@@ -76,14 +81,16 @@ func HandleConnection(conn net.Conn) {
 			log.Errorf("Failed to close connection: %v", err)
 		}
 
-		client := connections[conn.RemoteAddr().String()]
+		client := connections[FormatAddress(conn.RemoteAddr().String())]
 		client.Connected = false
 
-		connections[conn.RemoteAddr().String()] = client
+		connections[FormatAddress(conn.RemoteAddr().String())] = client
 	}(conn)
 
-	log.Infof("New connection (%s)", conn.RemoteAddr().String())
-	connections[conn.RemoteAddr().String()] = Client{Conn: conn, Connected: true}
+	client := Client{Conn: conn, Connected: true, Addr: FormatAddress(conn.RemoteAddr().String())}
+	connections[FormatAddress(conn.RemoteAddr().String())] = client
+
+	log.Infof("New connection [%s]", client.Addr)
 
 	buffer := make([]byte, 1024)
 	for {
@@ -91,12 +98,12 @@ func HandleConnection(conn net.Conn) {
 
 		if err != nil {
 			if strings.Contains(err.Error(), "An existing connection was forcibly closed by the remote host.") {
-				log.Warnf("Connection closed (%s)", conn.RemoteAddr().String())
-
-				client := connections[conn.RemoteAddr().String()]
+				client := connections[FormatAddress(conn.RemoteAddr().String())]
 				client.Connected = false
 
-				connections[conn.RemoteAddr().String()] = client
+				log.Warnf("Connection closed [%s]", client.Addr)
+
+				connections[FormatAddress(conn.RemoteAddr().String())] = client
 				break
 			}
 			log.Errorf("Error reading from connection: %v", err)
@@ -109,5 +116,10 @@ func HandleConnection(conn net.Conn) {
 }
 
 func ParseResponse(response string) {
-	fmt.Println(response)
+	fmt.Println()
+	log.Info("Response from " + selectedClient.Conn.RemoteAddr().String())
+	for _, s := range strings.Split(response, "\n") {
+		log.Infof(s)
+	}
+	fmt.Println()
 }

