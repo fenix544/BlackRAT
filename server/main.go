@@ -80,17 +80,13 @@ func HandleConnection(conn net.Conn) {
 		if err != nil {
 			log.Errorf("Failed to close connection: %v", err)
 		}
-
-		client := connections[FormatAddress(conn.RemoteAddr().String())]
-		client.Connected = false
-
-		connections[FormatAddress(conn.RemoteAddr().String())] = client
 	}(conn)
 
-	client := Client{Conn: conn, Connected: true, Addr: FormatAddress(conn.RemoteAddr().String())}
-	connections[FormatAddress(conn.RemoteAddr().String())] = client
+	addr := FormatAddress(conn.RemoteAddr().String())
+	client := Client{Conn: conn, Connected: true, Addr: addr}
 
-	log.Infof("New connection [%s]", client.Addr)
+	connections[addr] = client
+	log.Infof("New connection [%s]", addr)
 
 	buffer := make([]byte, 1024)
 	for {
@@ -98,12 +94,8 @@ func HandleConnection(conn net.Conn) {
 
 		if err != nil {
 			if strings.Contains(err.Error(), "An existing connection was forcibly closed by the remote host.") {
-				client := connections[FormatAddress(conn.RemoteAddr().String())]
 				client.Connected = false
-
 				log.Warnf("Connection closed [%s]", client.Addr)
-
-				connections[FormatAddress(conn.RemoteAddr().String())] = client
 				break
 			}
 			log.Errorf("Error reading from connection: %v", err)
@@ -113,6 +105,9 @@ func HandleConnection(conn net.Conn) {
 		data := buffer[:bytesRead]
 		ParseResponse(string(data))
 	}
+
+	client.Connected = false
+	connections[addr] = client
 }
 
 func ParseResponse(response string) {

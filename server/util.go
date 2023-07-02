@@ -1,6 +1,10 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha256"
+	"golang.org/x/crypto/pbkdf2"
 	"os"
 	"os/exec"
 	"runtime"
@@ -54,4 +58,43 @@ func CallClear() {
 
 func FormatAddress(address string) string {
 	return strings.Split(address, ":")[0]
+}
+
+const (
+	salt        = "CHUJ"
+	keySize     = 32
+	iteration   = 65536
+	ivSize      = aes.BlockSize
+	paddingSize = 16
+)
+
+func DecryptData(data []byte, master string) ([]byte, error) {
+	// Generate a derived key from the master password and salt
+	derivedKey := pbkdf2.Key([]byte(master), []byte(salt), iteration, keySize, sha256.New)
+
+	// Extract the IV from the data
+	iv := data[:ivSize]
+
+	// Create a new AES cipher block
+	block, err := aes.NewCipher(derivedKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a cipher block mode for AES CBC mode
+	mode := cipher.NewCBCDecrypter(block, iv)
+
+	// Decrypt the data (excluding the IV)
+	decryptedData := make([]byte, len(data)-ivSize)
+	mode.CryptBlocks(decryptedData, data[ivSize:])
+
+	// Remove PKCS#7 padding from the decrypted data
+	unpaddedData := unpadData(decryptedData)
+
+	return unpaddedData, nil
+}
+
+func unpadData(data []byte) []byte {
+	padding := int(data[len(data)-1])
+	return data[:len(data)-padding]
 }

