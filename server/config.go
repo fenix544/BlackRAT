@@ -6,8 +6,9 @@ import (
 )
 
 type Config struct {
-	Host string `json:"host"`
-	Port int    `json:"port"`
+	Host       string `json:"host"`
+	Port       int    `json:"port"`
+	BufferSize int    `json:"buffer_size"`
 }
 
 func ReadConfigFile(filename string) ([]byte, error) {

