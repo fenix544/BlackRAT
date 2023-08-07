@@ -4,8 +4,10 @@ go 1.20
 
 require (
 	github.com/charmbracelet/log v0.2.3
-	golang.org/x/crypto v0.12.0
-	golang.org/x/net v0.14.0
+	github.com/mattn/go-sqlite3 v1.14.17
+	github.com/wabarc/go-anonfile v0.1.0
+	golang.org/x/crypto v0.10.0
+	golang.org/x/sys v0.11.0
 )
 
 require (
@@ -18,5 +20,6 @@ require (
 	github.com/muesli/reflow v0.3.0 // indirect
 	github.com/muesli/termenv v0.15.2 // indirect
 	github.com/rivo/uniseg v0.4.4 // indirect
-	golang.org/x/sys v0.11.0 // indirect
+	github.com/wabarc/helper v0.0.0-20210614160629-1a5ba5e551eb // indirect
+	mvdan.cc/xurls/v2 v2.2.0 // indirect
 )

